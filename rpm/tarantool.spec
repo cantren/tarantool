@@ -187,6 +187,11 @@ fi
 # tarantool package should own module directories
 %dir %{_libdir}/tarantool
 %dir %{_datadir}/tarantool
+%dir %{_datadir}/tarantool/tarantoolctl/
+%dir %{_datadir}/tarantool/tarantoolctl/tarantoolctl/
+%{_datadir}/tarantool/tarantoolctl/tarantoolctl/init.lua
+%{_datadir}/tarantool/tarantoolctl/tarantoolctl/xlog.lua
+%{_datadir}/tarantool/tarantoolctl/tarantoolctl/control.lua
 
 %if %{with systemd}
 %{_unitdir}/tarantool@.service

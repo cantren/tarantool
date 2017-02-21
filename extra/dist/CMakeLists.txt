@@ -34,6 +34,7 @@ message (STATUS "tarantoolctl logdir: ${TARANTOOL_LOGDIR}")
 set(TARANTOOL_RUNDIR "${CMAKE_INSTALL_FULL_LOCALSTATEDIR}/run/tarantool")
 message (STATUS "tarantoolctl rundir: ${TARANTOOL_RUNDIR}")
 set(TARANTOOL_USER "tarantool")
+set(SYSCONFIG_PLUGINSDIR "tarantool/plugins/")
 set(SYSCONFIG_AVAILABLEDIR "tarantool/instances.available")
 set(SYSCONFIG_ENABLEDDIR "tarantool/instances.enabled")
 set(TARANTOOL_AVAILABLEDIR "${CMAKE_INSTALL_FULL_SYSCONFDIR}/${SYSCONFIG_AVAILABLEDIR}")
@@ -60,6 +61,23 @@ install (FILES ${CMAKE_CURRENT_BINARY_DIR}/tarantoolctl DESTINATION ${CMAKE_INST
     GROUP_READ GROUP_EXECUTE
     WORLD_READ WORLD_EXECUTE
 )
+
+# tarantoolctl default plugins
+install (FILES  ${CMAKE_CURRENT_SOURCE_DIR}/plugins/control.lua
+                ${CMAKE_CURRENT_SOURCE_DIR}/plugins/xlog.lua
+    DESTINATION ${MODULE_LUADIR}/tarantoolctl/tarantoolctl/
+    PERMISSIONS
+    OWNER_READ OWNER_WRITE
+    GROUP_READ
+    WORLD_READ)
+
+install (FILES  ${CMAKE_CURRENT_SOURCE_DIR}/plugins-init.lua
+    DESTINATION ${MODULE_LUADIR}/tarantoolctl/tarantoolctl/
+    RENAME      "init.lua"
+    PERMISSIONS
+    OWNER_READ OWNER_WRITE
+    GROUP_READ
+    WORLD_READ)
 
 # directories in /etc/ for tarantoolctl
 install(DIRECTORY DESTINATION

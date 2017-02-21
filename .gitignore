@@ -128,10 +128,14 @@ obj-*/
 parts/
 prime/
 stage/
+*.xlog
 *.snap
+*.vymeta
 ftp.log
 sftp.log
 ftpscript.txt
 sftpscript.txt
 *.md5sum
 extra/deploy_key
+./packpack
+/packpack

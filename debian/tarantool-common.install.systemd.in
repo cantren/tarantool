@@ -7,3 +7,6 @@
 /lib/systemd/system-generators/tarantool-generator
 /usr/lib/tmpfiles.d/tarantool.conf
 /usr/share/man/man1/tarantoolctl.1
+/usr/share/tarantool/tarantoolctl/tarantoolctl/control.lua
+/usr/share/tarantool/tarantoolctl/tarantoolctl/xlog.lua
+/usr/share/tarantool/tarantoolctl/tarantoolctl/init.lua

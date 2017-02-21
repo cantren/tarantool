@@ -2,3 +2,5 @@
 /etc/tarantool/instances.enabled
 /var/log/tarantool
 /var/lib/tarantool
+/usr/share/tarantool/tarantoolctl
+/usr/share/tarantool/tarantoolctl/tarantoolctl
