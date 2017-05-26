@@ -201,6 +201,7 @@ t;
   - SELECT
   - INSERT
   - EVAL
+  - SQL_EXECUTE
   - CALL
   - REPLACE
   - UPSERT

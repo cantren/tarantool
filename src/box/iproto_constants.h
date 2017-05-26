@@ -75,6 +75,18 @@ enum iproto_key {
 	IPROTO_VCLOCK = 0x26,
 	IPROTO_EXPR = 0x27, /* EVAL */
 	IPROTO_OPS = 0x28, /* UPSERT but not UPDATE ops, because of legacy */
+	IPROTO_SQL_TEXT = 0x29,
+	IPROTO_SQL_BIND = 0x2a,
+	IPROTO_SQL_OPTIONS = 0x2b,
+	/**
+	 * IPROTO_DESCRIPTION: [
+	 *      { IPROTO_FIELD_NAME: name },
+	 *      { ... },
+	 *      ...
+	 * ]
+	 */
+	IPROTO_DESCRIPTION = 0x2c,
+	IPROTO_FIELD_NAME = 0x2d,
 	/* Leave a gap between request keys and response keys */
 	IPROTO_DATA = 0x30,
 	IPROTO_ERROR = 0x31,
@@ -88,7 +100,8 @@ enum iproto_key {
 #define IPROTO_BODY_BMAP (bit(SPACE_ID) | bit(INDEX_ID) | bit(LIMIT) |\
 			  bit(OFFSET) | bit(ITERATOR) | bit(INDEX_BASE) |\
 			  bit(KEY) | bit(TUPLE) | bit(FUNCTION_NAME) | \
-			  bit(USER_NAME) | bit(EXPR) | bit(OPS))
+			  bit(USER_NAME) | bit(EXPR) | bit(OPS) |\
+			  bit(SQL_TEXT) | bit(SQL_OPTIONS) | bit(SQL_BIND))
 
 static inline bool
 xrow_header_has_key(const char *pos, const char *end)
@@ -141,6 +154,8 @@ enum iproto_type {
 	IPROTO_UPSERT = 9,
 	/** CALL request - returns arbitrary MessagePack */
 	IPROTO_CALL = 10,
+	/** Execute an SQL statement. */
+	IPROTO_SQL_EXECUTE = 11,
 	/** The maximum typecode used for box.stat() */
 	IPROTO_TYPE_STAT_MAX,
 

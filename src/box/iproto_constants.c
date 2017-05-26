@@ -86,6 +86,11 @@ const unsigned char iproto_key_type[IPROTO_KEY_MAX] =
 	/* 0x26 */	MP_MAP, /* IPROTO_VCLOCK */
 	/* 0x27 */	MP_STR, /* IPROTO_EXPR */
 	/* 0x28 */	MP_ARRAY, /* IPROTO_OPS */
+	/* 0x29 */	MP_STR, /* IPROTO_SQL_TEXT */
+	/* 0x2a */	MP_ARRAY, /* IPROTO_SQL_BIND */
+	/* 0x2b */	MP_ARRAY, /* IPROTO_SQL_OPTIONS */
+	/* 0x2c */	MP_ARRAY, /* IPROTO_DESCRIPTION */
+	/* 0x2d */	MP_STR, /* IPROTO_FIELD_NAME */
 	/* }}} */
 };
 
@@ -101,7 +106,8 @@ const char *iproto_type_strs[] =
 	"AUTH",
 	"EVAL",
 	"UPSERT",
-	"CALL"
+	"CALL",
+	"SQL_EXECUTE",
 };
 
 #define bit(c) (1ULL<<IPROTO_##c)
@@ -117,6 +123,7 @@ const uint64_t iproto_body_key_map[IPROTO_TYPE_STAT_MAX] = {
 	bit(EXPR)     | bit(TUPLE),                            /* EVAL */
 	bit(SPACE_ID) | bit(OPS) | bit(TUPLE),                 /* UPSERT */
 	bit(FUNCTION_NAME) | bit(TUPLE),                       /* CALL */
+	bit(SQL_TEXT) | bit(SQL_BIND) | bit(SQL_OPTIONS),      /* SQL_EXECUTE */
 };
 #undef bit
 
@@ -162,7 +169,13 @@ const char *iproto_key_strs[IPROTO_KEY_MAX] = {
 	"vector clock",     /* 0x26 */
 	"expression",       /* 0x27 */
 	"operations",       /* 0x28 */
-	NULL,               /* 0x29 */
+	"sql_text",         /* 0x29 */
+	"sql_bind",         /* 0x2a */
+	"sql_options",      /* 0x2b */
+	"description",      /* 0x2c */
+	"field_name",       /* 0x2d */
+	NULL,               /* 0x2e */
+	NULL,               /* 0x2f */
 	"data",             /* 0x30 */
 	"error"             /* 0x31 */
 };
