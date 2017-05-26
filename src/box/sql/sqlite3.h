@@ -3882,6 +3882,20 @@ SQLITE_API const char *sqlite3_bind_parameter_name(sqlite3_stmt*, int);
 */
 SQLITE_API int sqlite3_bind_parameter_index(sqlite3_stmt*, const char *zName);
 
+/**
+ * Get number of the named parameter in the prepared sql
+ * statement.
+ * @param pStmt Prepared statement.
+ * @param zName Parameter name.
+ * @param nName Parameter name length.
+ *
+ * @retval > 0 Number of the parameter.
+ * @retval   0 Parameter is not found.
+ */
+int
+sqlite3_bind_parameter_lindex(sqlite3_stmt *pStmt, const char *zName,
+			      int nName);
+
 /*
 ** CAPI3REF: Reset All Bindings On A Prepared Statement
 ** METHOD: sqlite3_stmt

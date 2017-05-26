@@ -240,6 +240,7 @@ error:
 			request->iterator = mp_decode_uint(&value);
 			break;
 		case IPROTO_TUPLE:
+		case IPROTO_SQL_BIND:
 			request->tuple = value;
 			request->tuple_end = data;
 			break;
@@ -247,6 +248,7 @@ error:
 		case IPROTO_FUNCTION_NAME:
 		case IPROTO_USER_NAME:
 		case IPROTO_EXPR:
+		case IPROTO_SQL_TEXT:
 			request->key = value;
 			request->key_end = data;
 			break;

@@ -383,7 +383,8 @@ static const struct cmsg_hop *dml_route[IPROTO_TYPE_STAT_MAX] = {
 	misc_route,                             /* IPROTO_AUTH */
 	misc_route,                             /* IPROTO_EVAL */
 	process1_route,                         /* IPROTO_UPSERT */
-	misc_route                              /* IPROTO_CALL */
+	misc_route,                             /* IPROTO_CALL */
+	misc_route,                             /* IPROTO_SQL_EXECUTE */
 };
 
 static const struct cmsg_hop sync_route[] = {
@@ -571,6 +572,7 @@ iproto_decode_msg(struct iproto_msg *msg, const char **pos, const char *reqend,
 	case IPROTO_AUTH:
 	case IPROTO_EVAL:
 	case IPROTO_UPSERT:
+	case IPROTO_SQL_EXECUTE:
 		/*
 		 * This is a common request which can be parsed with
 		 * request_decode(). Parse it before putting it into
@@ -924,6 +926,103 @@ error:
 	msg->write_end = obuf_create_svp(out);
 }
 
+extern "C" int
+iproto_sql_execute(const char *sql, uint32_t length, const char *parameters,
+		   uint32_t parameters_count, struct tuple **description,
+		   struct port *port, struct region *region);
+
+/**
+ * Execute the sql query and encode the response in an iproto
+ * message.
+ * Response structure:
+ * +----------------------------------------------+
+ * | IPROTO_SQL_EXECUTE, sync, schema_version ... | iproto_header
+ * +----------------------------------------------+---------------
+ * | Body - map with two keys.                    |
+ * |                                              |
+ * | IPROTO_BODY: {                               |
+ * |     IPROTO_DESCRIPTION: [                    |
+ * |         {IPROTO_FIELD_NAME: column name1},   |
+ * |         {IPROTO_FIELD_NAME: column name2},   | iproto_body
+ * |         ...                                  |
+ * |     ],                                       |
+ * |                                              |
+ * |     IPROTO_DATA: [                           |
+ * |         tuple, tuple, tuple, ...             |
+ * |     ]                                        |
+ * | }                                            |
+ * +----------------------------------------------+
+ *
+ * @param request IProto request.
+ * @param out     Out buffer of the iproto message.
+ * @param region  Region memory allocator.
+ */
+static void
+iproto_sql_execute_and_encode(struct request *request, struct obuf *out,
+			      struct region *region)
+{
+	struct tuple *description = NULL;
+	struct port port;
+	port_create(&port);
+	const char *sql = request->key;
+	char *begin, *pos;
+	struct obuf_svp svp = obuf_create_svp(out);
+	uint32_t length;
+	sql = mp_decode_str(&sql, &length);
+	const char *parameters;
+	uint32_t parameters_count;
+	if (request->tuple != NULL) {
+		parameters = request->tuple;
+		parameters_count = mp_decode_array(&parameters);
+	} else {
+		parameters = NULL;
+		parameters_count = 0;
+	}
+
+	if (iproto_sql_execute(sql, length, parameters, parameters_count,
+			       &description, &port, region) != 0)
+		goto error;
+	if (description == NULL) {
+		/* Request with boolean result. */
+		iproto_reply_ok(out, request->header->sync);
+		port_destroy(&port);
+		return;
+	}
+	/* Size of the iproto header and sql description. */
+	length = iproto_header_size + mp_sizeof_map(2) +
+		 mp_sizeof_uint(IPROTO_DESCRIPTION) + description->bsize +
+		 mp_sizeof_uint(IPROTO_DATA) + mp_sizeof_array(port.size);
+	pos = (char *) obuf_alloc(out, length);
+	if (pos == NULL) {
+		tuple_unref(description);
+		goto error;
+	}
+	/* Encode header, description and data. */
+	begin = pos;
+	pos += iproto_header_size;
+	pos = mp_encode_map(pos, 2);
+	pos = mp_encode_uint(pos, IPROTO_DESCRIPTION);
+	pos += tuple_to_buf(description, pos, description->bsize);
+	pos = mp_encode_uint(pos, IPROTO_DATA);
+	pos = mp_encode_array(pos, port.size);
+	tuple_unref(description);
+	if (port_dump(&port, out) != 0)
+		/*
+		 * In case of a dump error port unrefs its tuples.
+		 */
+		goto dump_error;
+	length = obuf_size(out) - svp.used - iproto_header_size;
+	iproto_encode_header(begin, length, IPROTO_OK, request->header->sync);
+	return;
+
+error:
+	port_destroy(&port);
+dump_error:
+	obuf_rollback_to_svp(out, &svp);
+	iproto_reply_error(out, diag_last_error(&fiber()->diag),
+			   request->header->sync);
+}
+
 static void
 tx_process_misc(struct cmsg *m)
 {
@@ -952,6 +1051,10 @@ tx_process_misc(struct cmsg *m)
 			break;
 		case IPROTO_PING:
 			iproto_reply_ok(out, msg->header.sync);
+			break;
+		case IPROTO_SQL_EXECUTE:
+			iproto_sql_execute_and_encode(&msg->request, out,
+						      &fiber()->gc);
 			break;
 		default:
 			unreachable();
