@@ -52,9 +52,11 @@ struct PACKED iproto_header_bin {
 	uint32_t v_schema_version;              /* schema_version */
 };
 
+const size_t iproto_header_size = sizeof(struct iproto_header_bin);
+
 static const struct iproto_header_bin iproto_header_bin = {
 	0xce, 0, 0x83,
-	IPROTO_REQUEST_TYPE, 0xce, 0,
+	IPROTO_REQUEST_TYPE, 0xce, IPROTO_OK,
 	IPROTO_SYNC, 0xcf, 0,
 	IPROTO_SCHEMA_VERSION, 0xce, 0
 };
@@ -82,12 +84,23 @@ iproto_encode_error(uint32_t error)
 }
 
 void
+iproto_encode_header(char *buf, uint32_t body_length, uint32_t response_status,
+		     uint64_t sync)
+{
+	struct iproto_header_bin *header = (struct iproto_header_bin *) buf;
+	*header = iproto_header_bin;
+	/* 5 - sizeof(m_len and v_len fields). */
+	header->v_len = mp_bswap_u32(sizeof(*header) + body_length - 5);
+	header->v_code = mp_bswap_u32(response_status);
+	header->v_sync = mp_bswap_u64(sync);
+	header->v_schema_version = mp_bswap_u32(schema_version);
+}
+
+void
 iproto_reply_ok(struct obuf *out, uint64_t sync)
 {
-	struct iproto_header_bin reply = iproto_header_bin;
-	reply.v_len = mp_bswap_u32(sizeof(iproto_header_bin) - 5 + 1);
-	reply.v_sync = mp_bswap_u64(sync);
-	reply.v_schema_version = mp_bswap_u32(schema_version);
+	struct iproto_header_bin reply;
+	iproto_encode_header((char *)&reply, 1, IPROTO_OK, sync);
 	uint8_t empty_map[1] = { 0x80 };
 	obuf_dup_xc(out, &reply, sizeof(reply));
 	obuf_dup_xc(out, &empty_map, sizeof(empty_map));
@@ -99,15 +112,11 @@ iproto_reply_error(struct obuf *out, const struct error *e, uint64_t sync)
 	uint32_t msg_len = strlen(e->errmsg);
 	uint32_t errcode = ClientError::get_errcode(e);
 
-	struct iproto_header_bin header = iproto_header_bin;
+	struct iproto_header_bin header;
 	struct iproto_body_bin body = iproto_error_bin;
 
-	uint32_t len = sizeof(header) - 5 + sizeof(body) + msg_len;
-	header.v_len = mp_bswap_u32(len);
-	header.v_code = mp_bswap_u32(iproto_encode_error(errcode));
-	header.v_sync = mp_bswap_u64(sync);
-	header.v_schema_version = mp_bswap_u32(schema_version);
-
+	iproto_encode_header((char *)&header, sizeof(body) + msg_len,
+			     iproto_encode_error(errcode), sync);
 	body.v_data_len = mp_bswap_u32(msg_len);
 	/* Malformed packet appears to be a lesser evil than abort. */
 	return obuf_dup(out, &header, sizeof(header)) != sizeof(header) ||
@@ -122,12 +131,11 @@ iproto_write_error(int fd, const struct error *e)
 	uint32_t msg_len = strlen(e->errmsg);
 	uint32_t errcode = ClientError::get_errcode(e);
 
-	struct iproto_header_bin header = iproto_header_bin;
+	struct iproto_header_bin header;
 	struct iproto_body_bin body = iproto_error_bin;
 
-	uint32_t len = sizeof(header) - 5 + sizeof(body) + msg_len;
-	header.v_len = mp_bswap_u32(len);
-	header.v_code = mp_bswap_u32(iproto_encode_error(errcode));
+	iproto_encode_header((char *)&header, sizeof(body) + msg_len,
+			     iproto_encode_error(errcode), 0);
 
 	body.v_data_len = mp_bswap_u32(msg_len);
 
@@ -171,12 +179,9 @@ void
 iproto_reply_select(struct obuf *buf, struct obuf_svp *svp, uint64_t sync,
 		    uint32_t count)
 {
-	uint32_t len = obuf_size(buf) - svp->used - 5;
-
-	struct iproto_header_bin header = iproto_header_bin;
-	header.v_len = mp_bswap_u32(len);
-	header.v_sync = mp_bswap_u64(sync);
-	header.v_schema_version = mp_bswap_u32(schema_version);
+	struct iproto_header_bin header;
+	iproto_encode_header((char *)&header, obuf_size(buf) - svp->used -
+			     sizeof(header), IPROTO_OK, sync);
 
 	struct iproto_body_bin body = iproto_body_bin;
 	body.v_data_len = mp_bswap_u32(count);

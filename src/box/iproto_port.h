@@ -39,6 +39,28 @@ extern "C" {
 struct obuf;
 struct obuf_svp;
 
+/**
+ * Size of the iproto header. Use this to allocate memory for the
+ * header and then call iproto_encode_header on the allocated
+ * space.
+ */
+extern const size_t iproto_header_size;
+
+/**
+ * Encode iproto header using the specified header fields.
+ *
+ * @param buf Previously allocated memory of at least
+ *        iproto_header_size bytes.
+ * @param body_length Length of the body of the iproto message.
+ *        Please, pass it without iproto_header_size.
+ * @param response_status IPROTO_OK or iproto error code.
+ * @param sync Sync of the response. Must be the same as the
+ *        request sync.
+ */
+void
+iproto_encode_header(char *buf, uint32_t body_length, uint32_t response_status,
+		     uint64_t sync);
+
 int
 iproto_prepare_select(struct obuf *buf, struct obuf_svp *svp);
 
