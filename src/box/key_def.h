@@ -528,6 +528,55 @@ index_def_copy(struct index_def *to, const struct index_def *from)
 }
 
 /**
+ * Set bit in the bitmask for the single changed column.
+ * @param column_mask Mask to update.
+ * @param fieldno     Updated fieldno.
+ */
+static inline void
+column_mask_set_fieldno(uint64_t *column_mask, int64_t fieldno)
+{
+	if (fieldno >= 63)
+		*column_mask |= 1;
+	else if (fieldno < 0)
+		/* Update ops can have fieldno < 0. */
+		*column_mask = UINT64_MAX;
+	else
+		*column_mask |= ((uint64_t) 1) << (63 - fieldno);
+}
+
+/**
+ * Set bits in the bitmask for the range of changed columns.
+ * @param column_mask Mask to update.
+ * @param first_fieldno_in_range First fieldno of the updated
+ *        range.
+ */
+static inline void
+column_mask_set_range(uint64_t *column_mask, uint32_t first_fieldno_in_range)
+{
+	/*
+	 * Set all bits by default via UINT64_MAX and then unset
+	 * bits that are placed before the operation field number.
+	 * Fields corresponding to this bits definitely will not
+	 * be changed.
+	 */
+	*column_mask |= UINT64_MAX >> first_fieldno_in_range;
+}
+
+/**
+ * True if the update operation does not change the key.
+ * @param def Key definition.
+ * @param update_mask Column mask of the update operation.
+ *
+ * @retval True, if the key is not updated.
+ * @retval False, if at least one key field can be updated.
+ */
+static inline bool
+key_update_can_be_skipped(const struct key_def *def, uint64_t update_mask)
+{
+	return (def->column_mask & update_mask) == 0;
+}
+
+/**
  * Set a single key part in a key def.
  * @pre part_no < part_count
  */

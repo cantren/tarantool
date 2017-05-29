@@ -402,7 +402,8 @@ MemtxSpace::prepareUpsert(struct txn_stmt *stmt, struct space *space,
 		tuple_ref(stmt->new_tuple);
 
 		Index *pk = space->index[0];
-		if ((column_mask & pk->index_def->key_def.column_mask) != 0 &&
+		if (!key_update_can_be_skipped(&pk->index_def->key_def,
+					       column_mask) &&
 		    tuple_compare(stmt->old_tuple, stmt->new_tuple,
 				  &pk->index_def->key_def) != 0) {
 			/* Primary key is changed: log error and do nothing. */

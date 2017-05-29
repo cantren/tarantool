@@ -235,7 +235,7 @@ vy_apply_upsert(const struct tuple *new_stmt, const struct tuple *old_stmt,
 	/*
 	 * Check that key hasn't been changed after applying operations.
 	 */
-	if ((key_def->column_mask & column_mask) != 0 &&
+	if (!key_update_can_be_skipped(key_def, column_mask) &&
 	    vy_tuple_compare(old_stmt, result_stmt, key_def) != 0) {
 		/*
 		 * Key has been changed: ignore this UPSERT and

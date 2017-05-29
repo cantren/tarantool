@@ -382,11 +382,7 @@ key_def_set_part(struct key_def *def, uint32_t part_no,
 	assert(type > FIELD_TYPE_ANY && type < field_type_MAX);
 	def->parts[part_no].fieldno = fieldno;
 	def->parts[part_no].type = type;
-	/* Calculate the bitmask of columns used in this key. */
-	if (fieldno >= 64)
-		def->column_mask = UINT64_MAX;
-	else
-		def->column_mask |= ((uint64_t)1) << (63 - fieldno);
+	column_mask_set_fieldno(&def->column_mask, fieldno);
 	/**
 	 * When all parts are set, initialize the tuple
 	 * comparator function.

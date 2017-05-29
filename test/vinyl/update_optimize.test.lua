@@ -146,4 +146,26 @@ space:select{}
 index2:select{}
 index3:select{}
 
+--
+-- gh-1716: optimize UPDATE with fieldno > 64.
+--
+-- Create a big tuple.
+long_tuple = {}
+for i = 1, 70 do long_tuple[i] = i end
+_ = space:replace(long_tuple)
+box.snapshot()
+
+-- Make update of not indexed field with pos > 64.
+index_run_count = wait_for_dump(index, index_run_count)
+old_stmt_count = box.info.vinyl().performance.dumped_statements
+_ = index:update({2}, {{'=', 65, 1000}})
+box.snapshot()
+
+-- Check the only primary index to be changed.
+index_run_count = wait_for_dump(index, index_run_count)
+new_stmt_count = box.info.vinyl().performance.dumped_statements
+new_stmt_count - old_stmt_count == 1
+old_stmt_count = new_stmt_count
+space:get{2}[65]
+
 space:drop()
