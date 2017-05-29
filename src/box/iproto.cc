@@ -913,7 +913,8 @@ tx_process_select(struct cmsg *m)
 		port_destroy(&port);
 		goto error;
 	}
-	port_dump(&port, out);
+	if (port_dump(&port, out) != 0)
+		goto error;
 	iproto_reply_select(out, &svp, msg->header.sync, port.size);
 	msg->write_end = obuf_create_svp(out);
 	return;

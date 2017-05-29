@@ -30,6 +30,7 @@
  */
 #include "port.h"
 #include "tuple.h"
+#include <small/obuf.h>
 #include <small/slab_cache.h>
 #include <small/mempool.h>
 #include <fiber.h>
@@ -96,22 +97,30 @@ port_destroy(struct port *port)
 	}
 }
 
-void
+int
 port_dump(struct port *port, struct obuf *out)
 {
 	struct port_entry *e = port->first;
 	if (e == NULL)
-		return;
-	tuple_to_obuf(e->tuple, out);
+		return 0;
+	struct obuf_svp svp = obuf_create_svp(out);
+	if (tuple_to_obuf(e->tuple, out) != 0)
+		return -1;
+	bool ok = true;
 	tuple_unref(e->tuple);
 	e = e->next;
 	while (e != NULL) {
 		struct port_entry *cur = e;
-		tuple_to_obuf(e->tuple, out);
+		if (ok && tuple_to_obuf(e->tuple, out) != 0) {
+			/* After the first error we can only destroy the port. */
+			ok = false;
+			obuf_rollback_to_svp(out, &svp);
+		}
 		e = e->next;
 		tuple_unref(cur->tuple);
 		mempool_free(&port_entry_pool, cur);
 	}
+	return ok ? 0 : -1;
 }
 
 void

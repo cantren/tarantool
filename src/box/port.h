@@ -78,7 +78,7 @@ port_create(struct port *port);
 void
 port_destroy(struct port *port);
 
-void
+int
 port_dump(struct port *port, struct obuf *out);
 
 int
