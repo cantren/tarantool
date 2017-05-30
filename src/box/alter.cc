@@ -1304,9 +1304,6 @@ on_drop_space(struct trigger * /* trigger */, void *event)
 static void
 on_replace_dd_space(struct trigger * /* trigger */, void *event)
 {
-	latch_lock(&schema_lock);
-	auto lock_guard = make_scoped_guard([&]{ latch_unlock(&schema_lock); });
-
 	struct txn *txn = (struct txn *) event;
 	txn_check_autocommit(txn, "Space _space");
 	struct txn_stmt *stmt = txn_current_stmt(txn);
@@ -1426,9 +1423,6 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 static void
 on_replace_dd_index(struct trigger * /* trigger */, void *event)
 {
-	latch_lock(&schema_lock);
-	auto lock_guard = make_scoped_guard([&]{ latch_unlock(&schema_lock); });
-
 	struct txn *txn = (struct txn *) event;
 	txn_check_autocommit(txn, "Space _index");
 	struct txn_stmt *stmt = txn_current_stmt(txn);

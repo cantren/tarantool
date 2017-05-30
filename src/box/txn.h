@@ -101,6 +101,8 @@ struct txn {
 	struct trigger fiber_on_yield, fiber_on_stop;
 	 /** Commit and rollback triggers */
 	struct rlist on_commit, on_rollback;
+	/** True is txn has a ddl statement. */
+	bool has_ddl;
 };
 
 /* Pointer to the current transaction (if any) */

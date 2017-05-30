@@ -34,6 +34,7 @@
 #include "journal.h"
 #include <fiber.h>
 #include "xrow.h"
+#include "schema.h"
 
 enum {
 	/**
@@ -104,6 +105,7 @@ txn_begin(bool is_autocommit)
 	txn->in_sub_stmt = 0;
 	txn->engine = NULL;
 	txn->engine_tx = NULL;
+	txn->has_ddl = false;
 	/* fiber_on_yield/fiber_on_stop initialized by engine on demand */
 	fiber_set_txn(fiber(), txn);
 	return txn;
@@ -134,6 +136,10 @@ txn_begin_stmt(struct space *space)
 	else if (txn->in_sub_stmt > TXN_SUB_STMT_MAX)
 		tnt_raise(ClientError, ER_SUB_STMT_MAX);
 
+	if (space_id(space) <= BOX_SYSTEM_ID_MAX && !txn->has_ddl) {
+		latch_lock(&schema_lock);
+		txn->has_ddl = true;
+	}
 	Engine *engine = space->handler->engine;
 	txn_begin_in_engine(engine, txn);
 	struct txn_stmt *stmt = txn_stmt_new(txn);
@@ -247,6 +253,8 @@ txn_commit(struct txn *txn)
 
 		txn->engine->commit(txn, signature);
 	}
+	if (txn->has_ddl)
+		latch_unlock(&schema_lock);
 	TRASH(txn);
 	/** Free volatile txn memory. */
 	fiber_gc();
@@ -290,6 +298,8 @@ txn_rollback()
 		trigger_run(&txn->on_rollback, txn); /* must not throw. */
 	if (txn->engine)
 		txn->engine->rollback(txn);
+	if (txn->has_ddl)
+		latch_unlock(&schema_lock);
 	TRASH(txn);
 	/** Free volatile txn memory. */
 	fiber_gc();
