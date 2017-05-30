@@ -1,0 +1,44 @@
+TAP version 13
+    # basic http post/get
+    1..8
+    ok - client is created
+    ok - GET: http code page exists
+    ok - GET: not empty body page exists
+    ok - GET: right body
+    ok - GET: http_code page not exists
+    ok - GET: not empty body page not exists
+    ok - GET: right body page not exists
+    ok - stats checking
+    # basic http post/get: end
+ok - basic http post/get
+    # Errors checks
+    1..6
+    ok - GET: curl exception on bad protocol
+    ok - POST: curl exception on bad protocol
+    ok - POST: sent: curl error on empty body
+    ok - PUT: sent: curl error on empty body
+    ok - GET: curl exception on bad url
+    ok - Exception on method, that doesn't exist
+    # Errors checks: end
+ok - Errors checks
+    # special methods
+    1..4
+    ok - HTTP:DELETE request
+    ok - HTTP:OPTIONS request
+    ok - HTTP:HEAD request code
+    ok - HTTP:HEAD request content
+    # special methods: end
+ok - special methods
+    # tests with server
+    1..9
+    ok - HTTP:TRACE request
+    ok - HTTP:CONNECT request
+    ok - PUT: headers
+    ok - PUT: body
+    ok - POST: headers
+    ok - POST: body
+    ok - Concurrent.Test free sockets
+    ok - Concurrent.Test no active requests
+    ok - Concurrent.Test timeout not expired
+    # tests with server: end
+ok - tests with server

@@ -1,0 +1,6 @@
+import subprocess
+
+proc = subprocess.Popen(["which node || which nodejs"], stdout=subprocess.PIPE, shell=True)
+(out, err) = proc.communicate()
+if not out or err:
+    self.skip=1

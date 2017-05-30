@@ -11,6 +11,7 @@ include_directories(${LUAJIT_INCLUDE_DIRS})
 include_directories(${READLINE_INCLUDE_DIRS})
 include_directories(${LIBYAML_INCLUDE_DIRS})
 include_directories(${MSGPUCK_INCLUDE_DIRS})
+include_directories(${CURL_INCLUDE_DIRS})
 
 set(LIBUTIL_FREEBSD_SRC ${CMAKE_SOURCE_DIR}/third_party/libutil_freebsd)
 include_directories(${LIBUTIL_FREEBSD_SRC})
@@ -43,6 +44,7 @@ lua_source(lua_sources lua/pwd.lua)
 lua_source(lua_sources lua/trigger.lua)
 lua_source(lua_sources lua/table.lua)
 lua_source(lua_sources ../third_party/luafun/fun.lua)
+lua_source(lua_sources lua/curl.lua)
 # LuaJIT jit.* library
 lua_source(lua_sources "${CMAKE_BINARY_DIR}/third_party/luajit/src/jit/bc.lua")
 lua_source(lua_sources "${CMAKE_BINARY_DIR}/third_party/luajit/src/jit/bcsave.lua")
@@ -107,6 +109,7 @@ set (server_sources
      coio.cc
      coeio.c
      iobuf.cc
+     curl.c
      coio_buf.cc
      pickle.c
      ipc.c
@@ -140,6 +143,7 @@ set (server_sources
      lua/pickle.c
      lua/fio.c
      lua/crypto.c
+     lua/curl.c
      ${lua_sources}
      ${PROJECT_SOURCE_DIR}/third_party/lua-yaml/lyaml.cc
      ${PROJECT_SOURCE_DIR}/third_party/lua-yaml/b64.c
@@ -169,6 +173,7 @@ set(api_headers
     ${CMAKE_SOURCE_DIR}/src/box/lua/tuple.h
     ${CMAKE_SOURCE_DIR}/src/latch.h
     ${CMAKE_SOURCE_DIR}/src/clock.h
+    ${CMAKE_SOURCE_DIR}/src/curl.h
 )
 rebuild_module_api(${api_headers})
 
@@ -196,6 +201,7 @@ set (common_libraries
     ${LIBYAML_LIBRARIES}
     ${READLINE_LIBRARIES}
     ${OPENSSL_LIBRARIES}
+    ${CURL_LIBRARIES}
 )
 
 if (TARGET_OS_LINUX OR TARGET_OS_DEBIAN_FREEBSD)
