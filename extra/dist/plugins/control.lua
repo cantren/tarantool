@@ -16,12 +16,12 @@ local console = require('console')
 local error = utils.error
 local syserror = utils.syserror
 local log_syserror = utils.log_syserror
-local log_debug = utils.log_debug
 
 ffi.cdef[[
     typedef int pid_t;
     int kill(pid_t pid, int sig);
     int isatty(int fd);
+    int getppid(void);
 ]]
 
 local TIMEOUT_INFINITY = 100 * 365 * 86400
@@ -88,12 +88,10 @@ local function control_prepare_context(ctl, ctx)
         return false
     end
     ctx.default_cfg.pid_file = fio.pathjoin(
-        ctx.pid_file_path,
-        ctx.instance_name .. '.pid'
+        ctx.pid_file_path, ctx.instance_name .. '.pid'
     )
     ctx.default_cfg.log = fio.pathjoin(
-        ctx.default_cfg.log,
-        ctx.instance_name .. '.log'
+        ctx.default_cfg.log, ctx.instance_name .. '.log'
     )
 
     ctx.default_cfg.wal_dir   = fio.pathjoin(ctx.default_cfg.wal_dir,   ctx.instance_name)
@@ -115,10 +113,16 @@ local function control_prepare_context(ctl, ctx)
     if ctx.command == 'eval' then
         ctx.eval_source = table.remove(ctx.positional_arguments, 1)
         if ctx.eval_source == nil and stdin_isatty() then
-            log.error("Error: expected source to evaluate, got nothing")
+            log.error("expected source to evaluate, got nothing")
             return false
         end
     end
+
+    local rv = os.execute("systemctl 2>/dev/null | grep '\\-\\.mount' " ..
+                          "1>/dev/null 2>/dev/null") == 0
+    ctx.with_systemd = rv and ctx.usermode
+    ctx.under_systemd = ctx.with_systemd and ffi.C.getppid() > 1
+
     return true
 end
 
@@ -224,11 +228,11 @@ end
 
 -- It's not 100% result guaranteed function, but it's ok for most cases
 -- Won't help in multiple race-conditions
--- Returns nil if tarantool isn't started,
--- Returns PID if tarantool isn't started
+-- Returns nil if Tarantool isn't started,
+-- Returns PID if Tarantool isn't started
 -- Returns false, error if error occured
 local function check_start(pid_file)
-    log_debug('Checking Tarantool with "%s" pid_file', pid_file)
+    log.verbose('Checking Tarantool with "%s" pid_file', pid_file)
     local fh = fio.open(pid_file, 'O_RDONLY')
     if fh == nil then
         if errno() == errno.ENOENT then
@@ -295,7 +299,7 @@ local function mkdir(ctx, dir)
 
     if not ctx.usermode and not fio.chown(dir, ctx.username, ctx.groupname) then
         log_syserror("failed chown (%s, %s, %s)", ctx.username,
-                        ctx.groupname, dir)
+                     ctx.groupname, dir)
         return false
     end
     return true
@@ -339,7 +343,7 @@ local function wrapper_cfg_closure(ctx)
             cfg.username = nil
         end
         if cfg.background == nil then
-            cfg.background = true
+            cfg.background = not ctx.under_systemd
         end
 
         if mk_default_dirs(ctx, cfg) == false then
@@ -373,11 +377,17 @@ end
 local function start(ctx)
     local function basic_start(ctx)
         log.info("Starting instance '%s'...", ctx.instance_name)
+        if ctx.under_systemd then
+            local cmd = "systemctl start tarantool@" .. ctx.instance_name
+            log.info("Forwarding to '%s'", cmd)
+            os.execute(cmd)
+            return 0
+        end
         local err = check_file(ctx.instance_path)
         if err ~= nil then
             error("Failed to check instance file '%s'", err)
         end
-        log_debug("Instance file is OK")
+        log.verbose("Instance file is OK")
         local pid, stat = check_start(ctx.default_cfg.pid_file)
         if type(pid) == 'number' then
             error("The daemon is already running with PID %s", pid)
@@ -386,12 +396,12 @@ local function start(ctx)
                       ctx.instance_name)
             error(stat)
         end
-        log_debug("Instance '%s' wasn't started before", ctx.instance_name)
+        log.verbose("Instance '%s' wasn't started before", ctx.instance_name)
         box.cfg = wrapper_cfg_closure(ctx)
-        require('title').update{
+        require('title').update({
             script_name = ctx.instance_path,
             __defer_update = true
-        }
+        })
         shift_argv(arg, 0, 2)
         -- it may throw error, but we will catch it in start() function
         dofile(ctx.instance_path)
@@ -411,7 +421,7 @@ local function start(ctx)
             if rv:match(':%d+: ') then
                 rv_debug, rv = rv:match('(.+:%d+): (.+)')
             end
-            log_debug("Error occured at %s", rv_debug)
+            log.verbose("Error occured at %s", rv_debug)
             log.error(rv)
         end
         if type(box.cfg) ~= 'function' then
@@ -428,8 +438,17 @@ end
 local function stop(ctx)
     local function basic_stop(ctx)
         log.info("Stopping instance '%s'...", ctx.instance_name)
-        local pid_file = ctx.default_cfg.pid_file
+        if ctx.under_systemd then
+            local cmd = "systemctl stop tarantool@" .. ctx.instance_name
+            log.info("Forwarding to '%s'", cmd)
+            os.execute(cmd)
+            return 0
+        end
+        if fio.stat(ctx.console_sock_path) then
+            fio.unlink(ctx.console_sock_path)
+        end
 
+        local pid_file = ctx.default_cfg.pid_file
         if fio.stat(pid_file) == nil then
             log.info("Process is not running (pid: %s)", pid_file)
             return 0
@@ -444,6 +463,9 @@ local function stop(ctx)
         local pid     = tonumber(raw_pid)
 
         if pid == nil or pid <= 0 then
+            if fio.unlink(pid_file) == nil then
+                log_syserror('failed to unlink file %s', pid_file)
+            end
             error("bad contents of pid file %s: '%s'", pid_file, raw_pid)
         end
 
@@ -453,9 +475,6 @@ local function stop(ctx)
 
         if fio.stat(pid_file) then
             fio.unlink(pid_file)
-        end
-        if fio.stat(ctx.console_sock_path) then
-            fio.unlink(ctx.console_sock_path)
         end
         return 0
     end
@@ -469,7 +488,7 @@ local function stop(ctx)
             if rv:match(':%d+: ') then
                 rv_debug, rv = rv:match('(.+:%d+): (.+)')
             end
-            log_debug("Error occured at %s", rv_debug)
+            log.verbose("Error occured at %s", rv_debug)
             log.error(rv)
         end
         return false
@@ -502,7 +521,7 @@ local function restart(ctx)
             if rv:match(':%d+: ') then
                 rv_debug, rv = rv:match('(.+:%d+): (.+)')
             end
-            log_debug("Error occured at %s", rv_debug)
+            log.verbose("Error occured at %s", rv_debug)
             log.error(rv)
         end
         return false
@@ -554,7 +573,7 @@ local function logrotate(ctx)
             if rv:match(':%d+: ') then
                 rv_debug, rv = rv:match('(.+:%d+): (.+)')
             end
-            log_debug("Error occured at %s", rv_debug)
+            log.verbose("Error occured at %s", rv_debug)
             log.error(rv)
         end
         return false
@@ -565,6 +584,13 @@ end
 local function status(ctx)
     local pid_file = ctx.default_cfg.pid_file
     local console_sock = ctx.console_sock_path
+
+    if ctx.under_systemd then
+        local cmd = "systemctl status tarantool@" .. ctx.instance_name
+        log.info("Forwarding to '%s'", cmd)
+        os.execute(cmd)
+        return 0
+    end
 
     if fio.stat(pid_file) == nil then
         if errno() == errno.ENOENT then
@@ -621,7 +647,7 @@ local function eval(ctx)
         local status, full_response = execute_remote(ctx.console_sock, code)
         if status == false then
             error(
-                "control socket exists, but tarantool doesn't listen on it"
+                "control socket exists, but Tarantool doesn't listen on it"
             )
         end
         local error_response = yaml.decode(full_response)[1]
@@ -644,7 +670,7 @@ local function eval(ctx)
             if rv:match(':%d+: ') then
                 rv_debug, rv = rv:match('(.+:%d+): (.+)')
             end
-            log_debug("Error occured at %s", rv_debug)
+            log.verbose("Error occured at %s", rv_debug)
             log.error(rv)
         end
         return false
@@ -830,7 +856,7 @@ local function connect(ctx)
             local status, full_response = execute_remote(ctx.remote_host,
                                                         ctx.connect_code)
             if not status then
-                error('failed to connect to tarantool')
+                error('failed to connect to Tarantool')
             end
             local error_response = yaml.decode(full_response)[1]
             if type(error_response) == 'table' and error_response.error then
@@ -859,13 +885,13 @@ local function connect(ctx)
     local stat, rv = pcall(basic_connect, ctx)
     if rv ~= 0 then stat = false end
     if not stat then
-        log.error("Failed connecting to remote instance '%s'", ctx.remote_host)
+        log.error("Failed to connect to remote instance '%s'", ctx.remote_host)
         if type(rv) == 'string' then
             local rv_debug = nil
             if rv:match(':%d+: ') then
                 rv_debug, rv = rv:match('(.+:%d+): (.+)')
             end
-            log_debug("Error occured at %s", rv_debug)
+            log.verbose("Error occured at %s", rv_debug)
             log.error(rv)
         end
         return false

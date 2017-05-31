@@ -2,7 +2,7 @@ local tntctl = require('ctl')
 local utils  = require('ctl.utils')
 
 local fio      = require('fio')
-local log     = require('log')
+local log      = require('log')
 local json     = require('json')
 local xlog     = require('xlog')
 local yaml     = require('yaml')
@@ -14,18 +14,16 @@ local error = utils.error
 -- we're using io.stdout here, because io.stderr is used by logger and we need
 -- to differintiate between cat output and logging
 
-local function find_space(sid, spaces)
-    if type(spaces) == 'number' then
-        return sid == spaces
+local function find_in_list(id, list)
+    if type(list) == 'number' then
+        return id == list
     end
-    local shown = false
-    for _, v in ipairs(spaces) do
-        if v == sid then
-            shown = true
-            break
+    for _, v in ipairs(list) do
+        if v == id then
+            return true
         end
     end
-    return shown
+    return false
 end
 
 local write_lua_table = nil
@@ -35,7 +33,7 @@ local function write_lua_string(string)
     io.stdout:write("'")
     local pos, byte = 1, string:byte(1)
     while byte ~= nil do
-        io.stdout:write(("\\x%x"):format(byte))
+        io.stdout:write(("\\x%02x"):format(byte))
         pos = pos + 1
         byte = string:byte(pos)
     end
@@ -116,6 +114,7 @@ local function cat(ctx)
         local options = ctx.keyword_arguments
         local from, to, spaces = options.from, options.to, options.space
         local show_system, cat_format = options['show-system'], options.format
+        local replicas = options.replica
 
         local format_cb   = cat_formats[cat_format]
         local is_printed  = false
@@ -123,12 +122,21 @@ local function cat(ctx)
             log.info("Processing file '%s'", file)
             for lsn, record in xlog.pairs(file) do
                 local sid = record.BODY.space_id
-                local is_filtered    = spaces ~= nil
-                local is_system      = sid < 512 and show_system == false
-                local isnt_specified = not (is_filtered and find_space(sid, spaces))
+                local rid = record.HEADER.replica_id
+                -- space filter rules
+                local is_space_filtered    = spaces ~= nil
+                local is_space_system      = sid < 512 and show_system == false
+                local isnt_space_specified = not (is_space_filtered and
+                                                  find_in_list(sid, spaces))
+                -- replica filter rules
+                local is_replica_filtered    = replicas ~= nil
+                local isnt_replica_specified = not (is_replica_filtered and
+                                                    find_in_list(rid, replicas))
                 if (lsn < from) or
-                (is_filtered and is_system and isnt_specified) or
-                (is_system and isnt_specified) then
+                   (is_space_filtered and is_space_system and
+                    isnt_space_specified) or
+                   (is_space_system and isnt_space_specified) or
+                   (is_replica_filtered and isnt_replica_specified) then
                     -- pass this tuple
                 elseif lsn >= to then
                     -- stop, as we've had finished reading tuple with lsn == to
@@ -172,7 +180,7 @@ local function play(ctx)
     local function basic_play(ctx)
         local options = ctx.keyword_arguments
         local from, to, spaces = options.from, options.to, options.space
-        local show_system = options['show-system']
+        local show_system, replicas = options['show-system'], options.replica
         local uri = ctx.remote_host
 
         local remote = netbox.new(uri)
@@ -183,12 +191,21 @@ local function play(ctx)
             log.info("Processing file '%s'", file)
             for lsn, record in xlog.pairs(file) do
                 local sid = record.BODY.space_id
-                local is_filtered    = spaces ~= nil
-                local is_system      = sid < 512 and show_system == false
-                local isnt_specified = not (is_filtered and find_space(sid, spaces))
+                local rid = record.HEADER.replica_id
+                -- space filter rules
+                local is_space_filtered    = spaces ~= nil
+                local is_space_system      = sid < 512 and show_system == false
+                local isnt_space_specified = not (is_space_filtered and
+                                                  find_in_list(sid, spaces))
+                -- replica filter rules
+                local is_replica_filtered    = replicas ~= nil
+                local isnt_replica_specified = not (is_replica_filtered and
+                                                    find_in_list(rid, replicas))
                 if (lsn < from) or
-                (is_filtered and is_system and isnt_specified) or
-                (is_system and isnt_specified) then
+                   (is_space_filtered and is_space_system and
+                    isnt_space_specified) or
+                   (is_space_system and isnt_space_specified) or
+                   (is_replica_filtered and isnt_replica_specified) then
                     -- pass this tuple
                 elseif lsn >= to then
                     -- stop, as we've had finished reading tuple with lsn == to
@@ -244,14 +261,15 @@ local function xlog_prepare_context(ctl, ctx)
         end
         local parameters = argparse(arg, {
             { 'space',       'number+'  },
+            { 'replica',     'number+'  },
             { 'show-system', 'boolean'  },
             { 'from',        'number'   },
             { 'to',          'number'   },
-            { 'help',        'boolean'  },
             { 'format',      'string'   },
             { 'force',       'boolean'  },
             { 'v',           'boolean+' },
-            { 'h',           'boolean'  }
+            { 'h',           'boolean'  },
+            { 'help',        'boolean'  },
         })
         local keyword_arguments = {}
         for k, v in pairs(parameters) do
@@ -295,33 +313,55 @@ local xlog_library = tntctl:register_library('xlog', { weight = 30 })
 xlog_library:register_prepare('xlog', xlog_prepare_context)
 xlog_library:register_method('cat', cat, {
     help = {
-        description = [=[Show contents of snapshot/xlog files. Result is printed
-        to stdout]=],
+        description = "Show contents of snapshot/xlog files.",
         arguments = {
-            {"--space=space_no ..",
-             "Filter by space number. May be passed more than once."},
-            {"--show-system", "Show contents of system spaces"},
-            {"--from=lsn-from", "Ignore operation with LSN lower than lsn-from"},
-            {"--to=lsn-to","Show operations with LSN lower than lsn-to "}
+            {
+                "--space=space-no ..",
+                "Filter output by space number. May be passed more than once."
+            }, {
+                "--replica=replica-id",
+                "Filter the output of relpica id. May be passed more than once"
+            }, {
+                "--show-system",
+                "Show contents of system spaces"
+            }, {
+                "--from=lsn-from",
+                "Show operations with LSN more than lsn-from"
+            }, {
+                "--to=lsn-to",
+                "Show operations with LSN less than lsn-to "
+            }
         },
-        header = "%s cat <filename>.. [--space=space_no..] [--show-system] " ..
-                 "[--from=from_lsn] [--to=to_lsn]",
+        header = "%s cat <filename>.. [--space=space-no..] [--show-system] " ..
+                 "[--from=from_lsn] [--to=to_lsn] [--replica=replica-id]",
     },
     exiting = true,
 })
 xlog_library:register_method('play', play, {
     help = {
-        description = [=[Play contents of snapshot/xlog files on another
-        Tarantool instance]=],
+        description = "Play the contents of .snap/.xlog files to another " ..
+                      "Tarantool instance",
         arguments = {
-            {"--space=space_no..",
-             "Filter by space number. May be passed more than once."},
-            {"--show-system", "Play contents of system spaces"},
-            {"--from=lsn-from", "Ignore operation with LSN lower than lsn-from"},
-            {"--to=lsn-to", "Play operations with LSN lower than lsn-to "}
+            {
+                "--space=space-no ..",
+                "Filter output by space number. May be passed more than once."
+            }, {
+                "--replica=replica-id",
+                "Filter the output of relpica id. May be passed more than once"
+            }, {
+                "--show-system",
+                "Show contents of system spaces"
+            }, {
+                "--from=lsn-from",
+                "Show operations with LSN more than lsn-from"
+            }, {
+                "--to=lsn-to",
+                "Show operations with LSN less than lsn-to "
+            }
         },
-        header = "%s play <instance_uri> <filename>.. [--space=space_no..] " ..
-                 "[--show-system] [--from=lsn-from] [--to=lsn-to]",
+        header = "%s play <instance_uri> <filename>.. [--space=space-no..] " ..
+                 "[--show-system] [--from=lsn-from] [--to=lsn-to] " ..
+                 "[--replica=replica-id]",
     },
     exiting = true,
 })
