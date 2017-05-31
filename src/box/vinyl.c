@@ -1869,7 +1869,7 @@ vy_page_index_encode(const uint32_t *page_index, uint32_t count,
  */
 static int
 vy_run_write_page(struct vy_run_info *run_info, struct xlog *data_xlog,
-		  struct vy_write_iterator *wi, const struct tuple **curr_stmt,
+		  struct vy_stmt_stream *wi, struct tuple **curr_stmt,
 		  uint64_t page_size, struct bloom_spectrum *bs,
 		  const struct key_def *key_def,
 		  const struct key_def *user_key_def, bool is_primary,
@@ -1915,6 +1915,8 @@ vy_run_write_page(struct vy_run_info *run_info, struct xlog *data_xlog,
 	vy_page_info_create(page, data_xlog->offset, *curr_stmt, key_def);
 	xlog_tx_begin(data_xlog);
 
+	/* Last written statement */
+	struct tuple *last_stmt = *curr_stmt;
 	do {
 		uint32_t *offset = (uint32_t *) ibuf_alloc(&page_index_buf,
 							   sizeof(uint32_t));
@@ -1935,16 +1937,18 @@ vy_run_write_page(struct vy_run_info *run_info, struct xlog *data_xlog,
 		run_info->min_lsn = MIN(run_info->min_lsn, lsn);
 		run_info->max_lsn = MAX(run_info->max_lsn, lsn);
 
-		if (vy_write_iterator_next(wi, curr_stmt))
+		if (wi->iface->next(wi, curr_stmt))
 			goto error_rollback;
 
 		if (*curr_stmt == NULL)
 			end_of_run = true;
+		else
+			last_stmt = *curr_stmt;
 	} while (end_of_run == false &&
 		 obuf_size(&data_xlog->obuf) < page_size);
 
 	/* We don't write empty pages. */
-	assert(vy_write_iterator_get_last(wi) != NULL);
+	assert(last_stmt != NULL);
 
 	if (end_of_run) {
 		/*
@@ -1954,8 +1958,7 @@ vy_run_write_page(struct vy_run_info *run_info, struct xlog *data_xlog,
 		 * than a fiber. To reach this, we must copy the
 		 * key into malloced memory.
 		 */
-		region_key = tuple_extract_key(vy_write_iterator_get_last(wi),
-					       key_def, NULL);
+		region_key = tuple_extract_key(last_stmt, key_def, NULL);
 		if (region_key == NULL)
 			goto error_rollback;
 		assert(run_info->max_key == NULL);
@@ -2013,17 +2016,17 @@ error_page_index:
 static int
 vy_run_write_data(struct vy_run *run, const char *dirpath,
 		  uint32_t space_id, uint32_t iid,
-		  struct vy_write_iterator *wi, uint64_t page_size,
+		  struct vy_stmt_stream *wi, uint64_t page_size,
 		  const struct key_def *key_def,
 		  const struct key_def *user_key_def,
 		  size_t max_output_count, double bloom_fpr)
 {
-	const struct tuple *stmt;
+	struct tuple *stmt;
 
 	/* Start iteration. */
-	if (vy_write_iterator_start(wi) != 0)
+	if (wi->iface->start(wi) != 0)
 		goto err;
-	if (vy_write_iterator_next(wi, &stmt) != 0)
+	if (wi->iface->next(wi, &stmt) != 0)
 		goto err;
 
 	/* Do not create empty run files. */
@@ -2079,7 +2082,7 @@ vy_run_write_data(struct vy_run *run, const char *dirpath,
 	run->info.has_bloom = true;
 	bloom_spectrum_destroy(&bs, runtime.quota);
 done:
-	vy_write_iterator_cleanup(wi);
+	wi->iface->stop(wi);
 	return 0;
 
 err_close_xlog:
@@ -2088,7 +2091,7 @@ err_close_xlog:
 err_free_bloom:
 	bloom_spectrum_destroy(&bs, runtime.quota);
 err:
-	vy_write_iterator_cleanup(wi);
+	wi->iface->stop(wi);
 	return -1;
 }
 
@@ -2410,7 +2413,7 @@ vy_range_delete(struct vy_range *range)
 static int
 vy_run_write(struct vy_run *run, const char *dirpath,
 	     uint32_t space_id, uint32_t iid,
-	     struct vy_write_iterator *wi, uint64_t page_size,
+	     struct vy_stmt_stream *wi, uint64_t page_size,
 	     const struct key_def *key_def,
 	     const struct key_def *user_key_def,
 	     size_t max_output_count, double bloom_fpr,
@@ -3492,7 +3495,7 @@ struct vy_task {
 	/** Run written by this task. */
 	struct vy_run *new_run;
 	/** Write iterator producing statements for the new run. */
-	struct vy_write_iterator *wi;
+	struct vy_stmt_stream *wi;
 	/**
 	 * The current generation at the time of task start.
 	 * On success a dump task dumps all in-memory trees
@@ -3724,7 +3727,7 @@ delete_mems:
 	index->generation = task->generation;
 
 	/* The iterator has been cleaned up in a worker thread. */
-	vy_write_iterator_delete(task->wi);
+	task->wi->iface->close(task->wi);
 
 	vy_scheduler_add_index(scheduler, index);
 	if (index->id != 0)
@@ -3753,7 +3756,7 @@ vy_task_dump_abort(struct vy_task *task, bool in_shutdown)
 	struct vy_scheduler *scheduler = index->env->scheduler;
 
 	/* The iterator has been cleaned up in a worker thread. */
-	vy_write_iterator_delete(task->wi);
+	task->wi->iface->close(task->wi);
 
 	if (!in_shutdown && !index->is_dropped) {
 		say_error("%s: dump failed: %s", vy_index_name(index),
@@ -3850,7 +3853,7 @@ vy_task_dump_new(struct vy_index *index, struct vy_task **p_task)
 	assert(dump_lsn >= 0);
 	new_run->dump_lsn = dump_lsn;
 
-	struct vy_write_iterator *wi;
+	struct vy_stmt_stream *wi;
 	bool is_last_level = (index->run_count == 0);
 	wi = vy_write_iterator_new(index->key_def, index->surrogate_format,
 				   index->upsert_format, index->id == 0,
@@ -3889,7 +3892,7 @@ vy_task_dump_new(struct vy_index *index, struct vy_task **p_task)
 	return 0;
 
 err_wi_sub:
-	vy_write_iterator_delete(wi);
+	task->wi->iface->close(wi);
 err_wi:
 	vy_run_discard(new_run);
 err_run:
@@ -4032,7 +4035,7 @@ vy_task_compact_complete(struct vy_task *task)
 	}
 
 	/* The iterator has been cleaned up in worker. */
-	vy_write_iterator_delete(task->wi);
+	task->wi->iface->close(task->wi);
 
 	vy_scheduler_add_range(scheduler, range);
 
@@ -4049,7 +4052,7 @@ vy_task_compact_abort(struct vy_task *task, bool in_shutdown)
 	struct vy_scheduler *scheduler = index->env->scheduler;
 
 	/* The iterator has been cleaned up in worker. */
-	vy_write_iterator_delete(task->wi);
+	task->wi->iface->close(task->wi);
 
 	if (!in_shutdown && !index->is_dropped) {
 		say_error("%s: failed to compact range %s: %s",
@@ -4097,7 +4100,7 @@ vy_task_compact_new(struct vy_range *range, struct vy_task **p_task)
 	if (new_run == NULL)
 		goto err_run;
 
-	struct vy_write_iterator *wi;
+	struct vy_stmt_stream *wi;
 	bool is_last_level = (range->compact_priority == range->slice_count);
 	wi = vy_write_iterator_new(index->key_def, index->surrogate_format,
 				   index->upsert_format, index->id == 0,
@@ -4142,7 +4145,7 @@ vy_task_compact_new(struct vy_range *range, struct vy_task **p_task)
 	return 0;
 
 err_wi_sub:
-	vy_write_iterator_delete(wi);
+	task->wi->iface->close(wi);
 err_wi:
 	vy_run_discard(new_run);
 err_run:
@@ -8338,7 +8341,7 @@ struct vy_join_ctx {
 	 * Write iterator for merging runs before sending
 	 * them to the replica.
 	 */
-	struct vy_write_iterator *wi;
+	struct vy_stmt_stream *wi;
 	/**
 	 * List of run slices of the current range, linked by
 	 * vy_slice::in_join. The newer a slice the closer it
@@ -8362,11 +8365,11 @@ vy_send_range_f(struct cbus_call_msg *cmsg)
 {
 	struct vy_join_ctx *ctx = container_of(cmsg, struct vy_join_ctx, cmsg);
 
-	const struct tuple *stmt;
-	int rc = vy_write_iterator_start(ctx->wi);
+	struct tuple *stmt;
+	int rc = ctx->wi->iface->start(ctx->wi);
 	if (rc != 0)
 		goto err;
-	while ((rc = vy_write_iterator_next(ctx->wi, &stmt)) == 0 &&
+	while ((rc = ctx->wi->iface->next(ctx->wi, &stmt)) == 0 &&
 	       stmt != NULL) {
 		struct xrow_header xrow;
 		rc = vy_stmt_encode_primary(stmt, ctx->key_def,
@@ -8381,7 +8384,7 @@ vy_send_range_f(struct cbus_call_msg *cmsg)
 		fiber_gc();
 	}
 err:
-	vy_write_iterator_cleanup(ctx->wi);
+	ctx->wi->iface->stop(ctx->wi);
 	fiber_gc();
 	return rc;
 }
@@ -8422,7 +8425,7 @@ vy_send_range(struct vy_join_ctx *ctx)
 	rlist_create(&ctx->slices);
 
 out_delete_wi:
-	vy_write_iterator_delete(ctx->wi);
+	ctx->wi->iface->close(ctx->wi);
 	ctx->wi = NULL;
 out:
 	return rc;
