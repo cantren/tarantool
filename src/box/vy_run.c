@@ -1896,8 +1896,10 @@ vy_slice_stream_read_page(struct vy_slice_stream *stream)
  * @retval -1 read or memory error
  */
 static NODISCARD int
-vy_slice_stream_search(struct vy_slice_stream *stream)
+vy_slice_stream_search(struct vy_stmt_stream *virt_stream)
 {
+	assert(virt_stream->iface->start == vy_slice_stream_search);
+	struct vy_slice_stream *stream = (struct vy_slice_stream *)virt_stream;
 	assert(stream->page == NULL);
 	if (stream->slice->begin == NULL) {
 		/* Already at the beginning */
@@ -1956,10 +1958,6 @@ vy_slice_stream_next(struct vy_stmt_stream *virt_stream, struct tuple **ret)
 	assert(virt_stream->iface->next == vy_slice_stream_next);
 	struct vy_slice_stream *stream = (struct vy_slice_stream *)virt_stream;
 	*ret = NULL;
-
-	/* If it's the first call, run binary search on slice->begin */
-	if (stream->tuple == NULL && vy_slice_stream_search(stream) != 0)
-		return -1;
 
 	/* If the slice is ended, return EOF */
 	if (stream->page_no > stream->slice->last_page_no)
@@ -2029,7 +2027,10 @@ vy_slice_stream_close(struct vy_stmt_stream *virt_stream)
 }
 
 static const struct vy_stmt_stream_iface vy_slice_stream_iface = {
+	.start = vy_slice_stream_search,
 	.next = vy_slice_stream_next,
+	.get_last = NULL,
+	.stop = NULL,
 	.close = vy_slice_stream_close
 };
 
