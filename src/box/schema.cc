@@ -251,15 +251,14 @@ schema_init()
 	 */
 	/* _schema - key/value space with schema description */
 	struct space_def def = {
-		BOX_SCHEMA_ID, ADMIN, 0, "_schema", "memtx", {false}
+		BOX_SCHEMA_ID, ADMIN, 0, "_schema", "memtx", space_opts_default
 	};
-	struct index_opts opts = index_opts_default;
 	struct index_def *index_def = index_def_new(def.id,
 						    "_schema",
 						    0 /* index id */,
 						    "primary", /* name */
 						    TREE /* index type */,
-						    &opts,
+						    &index_opts_default,
 						    1); /* part count */
 	if (index_def == NULL)
 		diag_raise();
@@ -309,7 +308,7 @@ schema_init()
 				  0 /* index id */,
 				  "primary",
 				  TREE /* index type */,
-				  &opts,
+				  &index_opts_default,
 				  2); /* part count */
 	if (index_def == NULL)
 		diag_raise();

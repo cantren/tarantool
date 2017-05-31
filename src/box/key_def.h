@@ -458,10 +458,27 @@ struct space_opts {
 	 * - changes are not part of a snapshot
 	 */
 	bool temporary;
+	/**
+	 * Truncate counter, bumping it triggers
+	 * space truncation.
+	 */
+	int64_t truncate_count;
 };
 
 extern const struct space_opts space_opts_default;
 extern const struct opt_def space_opts_reg[];
+
+/**
+ * Return true if space options @o1 and @o2 are equal.
+ * Note, this function does not take into account
+ * @truncate_count, because formally it isn't a part
+ * of a space definition.
+ */
+extern bool
+space_opts_equal(const struct space_opts *o1, const struct space_opts *o2);
+
+extern char *
+space_opts_encode(char *data, char *data_end, const struct space_opts *opts);
 
 /** Space metadata. */
 struct space_def {
@@ -480,6 +497,13 @@ struct space_def {
 	char engine_name[BOX_NAME_MAX + 1];
 	struct space_opts opts;
 };
+
+/**
+ * Return true if space definitions @def1 and @def2 are equal.
+ * See also space_opts_equal().
+ */
+extern bool
+space_def_equal(const struct space_def *def1, const struct space_def *def2);
 
 /**
  * API of C stored function.
@@ -697,20 +721,6 @@ void
 space_def_check(struct space_def *def, uint32_t namelen,
                 uint32_t engine_namelen,
                 int32_t errcode);
-
-/**
- * Given a tuple with an index definition, update the LSN stored
- * in the index options.
- *
- * @return a tuple with updated lsn in key def. The returned tuple
- *         is blessed (referenced by box_tuple_bless()).
- *
- * Throws an exception if error.
- *
- * @note Implemented in alter.cc
- */
-extern struct tuple *
-index_def_tuple_update_lsn(struct tuple *tuple, int64_t lsn);
 
 /**
  * Check object identifier for invalid symbols.

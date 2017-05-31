@@ -584,11 +584,13 @@ key_validate_parts(struct key_def *key_def, const char *key,
 }
 
 const struct space_opts space_opts_default = {
-	/* .temporary = */ false,
+	/* .temporary      = */ false,
+	/* .truncate_count = */ 0,
 };
 
 const struct opt_def space_opts_reg[] = {
 	OPT_DEF("temporary", OPT_BOOL, struct space_opts, temporary),
+	OPT_DEF("truncate_count", OPT_INT, struct space_opts, truncate_count),
 	{ NULL, opt_type_MAX, 0, 0 }
 };
 
@@ -613,6 +615,27 @@ space_def_check(struct space_def *def, uint32_t namelen, uint32_t engine_namelen
 			  "space engine name is too long");
 	}
 	identifier_check(def->engine_name);
+	if (def->opts.truncate_count < 0) {
+		tnt_raise(ClientError, errcode, def->name,
+			  "truncate count must be >= 0");
+	}
+}
+
+bool
+space_opts_equal(const struct space_opts *o1, const struct space_opts *o2)
+{
+	return (o1->temporary == o2->temporary);
+}
+
+bool
+space_def_equal(const struct space_def *def1, const struct space_def *def2)
+{
+	return (def1->id == def2->id &&
+		def1->uid == def2->uid &&
+		def1->exact_field_count == def2->exact_field_count &&
+		strcmp(def1->name, def2->name) == 0 &&
+		strcmp(def1->engine_name, def2->engine_name) == 0 &&
+		space_opts_equal(&def1->opts, &def2->opts));
 }
 
 bool

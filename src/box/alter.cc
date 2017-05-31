@@ -485,53 +485,18 @@ opts_encode(char *data, char *data_end, const void *opts,
 	return data;
 }
 
-
 /**
- * Encode options index_opts into msgpack stream.
+ * Encode options spaces_opts into msgpack stream.
  * @pre output buffer is reserved to contain enough space for the
  * output.
  *
  * @return a pointer to the end of the stream.
  */
-static char *
-index_opts_encode(char *data, char *data_end, const struct index_opts *opts)
+char *
+space_opts_encode(char *data, char *data_end, const struct space_opts *opts)
 {
-	return opts_encode(data, data_end, opts, &index_opts_default,
-			   index_opts_reg);
-}
-
-struct tuple *
-index_def_tuple_update_lsn(struct tuple *tuple, int64_t lsn)
-{
-	bool is_166plus;
-	index_def_check_tuple(tuple, &is_166plus);
-	if (!is_166plus)
-		return tuple;
-	struct index_opts opts;
-	const char *opts_field = tuple_field(tuple, INDEX_OPTS);
-	const char *opts_field_end = index_opts_create(&opts, opts_field);
-	opts.lsn = lsn;
-	size_t size = (opts_field_end - opts_field) + 64;
-	char *buf = (char *)malloc(size);
-	if (buf == NULL)
-		tnt_raise(OutOfMemory, size, "malloc", "buf");
-	char *buf_end = buf;
-	buf_end = mp_encode_array(buf_end, 2);
-	buf_end = mp_encode_array(buf_end, 3);
-	buf_end = mp_encode_str(buf_end, "#", 1);
-	buf_end = mp_encode_uint(buf_end, INDEX_OPTS + 1);
-	buf_end = mp_encode_uint(buf_end, 1);
-	buf_end = mp_encode_array(buf_end, 3);
-	buf_end = mp_encode_str(buf_end, "!", 1);
-	buf_end = mp_encode_uint(buf_end, INDEX_OPTS + 1);
-	buf_end = index_opts_encode(buf_end, buf + size, &opts);
-	/* No check of return value: buf is checked by box_tuple_update */
-	assert(buf_end < buf + size);
-	tuple = box_tuple_update(tuple, buf, buf_end);
-	free(buf);
-	if (tuple == NULL)
-		diag_raise();
-	return tuple;
+	return opts_encode(data, data_end, opts, &space_opts_default,
+			   space_opts_reg);
 }
 
 /**
@@ -1219,6 +1184,103 @@ AddIndex::~AddIndex()
 
 /* }}} */
 
+/* {{{ Space truncate */
+
+struct truncate_space {
+	/** Space being truncated. */
+	struct space *old_space;
+	/** Space created as a result of truncation. */
+	struct space *new_space;
+	/** Trigger executed to commit truncation. */
+	struct trigger on_commit;
+	/** Trigger executed to rollback truncation. */
+	struct trigger on_rollback;
+};
+
+/**
+ * Call the engine specific method to commit truncation
+ * and delete the old space.
+ */
+static void
+truncate_space_commit(struct trigger *trigger, void * /* event */)
+{
+	struct truncate_space *truncate =
+		(struct truncate_space *) trigger->data;
+	truncate->new_space->handler->commitTruncateSpace(truncate->old_space,
+							  truncate->new_space);
+	space_delete(truncate->old_space);
+}
+
+/**
+ * Move the old space back to the cache and delete
+ * the new space.
+ */
+static void
+truncate_space_rollback(struct trigger *trigger, void * /* event */)
+{
+	struct truncate_space *truncate =
+		(struct truncate_space *) trigger->data;
+	if (space_cache_replace(truncate->old_space) != truncate->new_space)
+		unreachable();
+	space_delete(truncate->new_space);
+}
+
+/**
+ * Handle space truncation.
+ *
+ * In a nutshell, we truncate a space by replacing it with
+ * a new empty space with the same definition and indexes.
+ * Note, although we instantiate the new space before WAL
+ * write, we don't propagate changes to the old space in
+ * case a WAL write error happens and we have to rollback.
+ * This is OK, because a WAL write error implies cascading
+ * rollback of all transactions following this one.
+ */
+static void
+truncate_space_do(struct txn *txn, struct space *old_space,
+		  struct space_def *def)
+{
+	struct truncate_space *truncate =
+		region_calloc_object_xc(&fiber()->gc, struct truncate_space);
+
+	/* Create an empty copy of the old space. */
+	struct rlist key_list;
+	space_dump_def(old_space, &key_list);
+	struct space *new_space = space_new(def, &key_list);
+	auto guard = make_scoped_guard([=] { space_delete(new_space); });
+
+	/* Notify the engine about upcoming space truncation. */
+	new_space->handler->prepareTruncateSpace(old_space, new_space);
+
+	guard.is_active = false;
+
+	/*
+	 * Replace the old space with the new one in the space
+	 * cache. Requests processed after this point will see
+	 * the space as truncated.
+	 */
+	if (space_cache_replace(new_space) != old_space)
+		unreachable();
+
+	/*
+	 * Register the trigger that will commit or rollback
+	 * truncation depending on whether WAL write succeeds
+	 * or fails.
+	 */
+	truncate->old_space = old_space;
+	truncate->new_space = new_space;
+
+	trigger_create(&truncate->on_commit,
+		       truncate_space_commit, truncate, NULL);
+	txn_on_commit(txn, &truncate->on_commit);
+
+	trigger_create(&truncate->on_rollback,
+		       truncate_space_rollback, truncate, NULL);
+	txn_on_rollback(txn, &truncate->on_rollback);
+}
+
+/* }}} */
+
 /**
  * A trigger invoked on commit/rollback of DROP/ADD space.
  * The trigger removed the space from the space cache.
@@ -1360,16 +1422,39 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 		 * Allow change of space properties, but do it
 		 * in WAL-error-safe mode.
 		 */
-		struct alter_space *alter = alter_space_new();
-		auto scoped_guard =
-			make_scoped_guard([=] {alter_space_delete(alter);});
-		ModifySpace *modify =
-			AlterSpaceOp::create<ModifySpace>();
-		alter_space_add_op(alter, modify);
-		space_def_create_from_tuple(&modify->def, new_tuple,
-					    ER_ALTER_SPACE);
-		alter_space_do(txn, alter, old_space);
-		scoped_guard.is_active = false;
+		struct space_def def;
+		space_def_create_from_tuple(&def, new_tuple, ER_ALTER_SPACE);
+		int64_t truncate = def.opts.truncate_count -
+			old_space->def.opts.truncate_count;
+		if (truncate == 0) {
+			/*
+			 * Space alter.
+			 */
+			struct alter_space *alter = alter_space_new();
+			auto scoped_guard = make_scoped_guard([=] {
+				alter_space_delete(alter);
+			});
+			ModifySpace *modify =
+				AlterSpaceOp::create<ModifySpace>();
+			modify->def = def;
+			alter_space_add_op(alter, modify);
+			alter_space_do(txn, alter, old_space);
+			scoped_guard.is_active = false;
+		} else {
+			/*
+			 * Space truncate.
+			 */
+			if (truncate != 1) {
+				tnt_raise(ClientError, ER_ALTER_SPACE, def.name,
+					  "invalid truncate count usage");
+			}
+			if (!space_def_equal(&old_space->def, &def)) {
+				tnt_raise(ClientError, ER_ALTER_SPACE, def.name,
+					  "can't truncate and alter space "
+					  "at the same time");
+			}
+			truncate_space_do(txn, old_space, &def);
+		}
 	}
 }
 
