@@ -4,6 +4,7 @@ local utils  = require('ctl.utils')
 local ffi     = require('ffi')
 local fio     = require('fio')
 local log     = require('log')
+local pwd     = require('pwd')
 local json    = require('json')
 local yaml    = require('yaml')
 local errno   = require('errno')
@@ -100,7 +101,7 @@ local function control_prepare_context(ctl, ctx)
 
     if not ctx.usermode then
         ctx.username = ctl:get_config('default_cfg.username')
-        local user_info = utils.user_get(ctx.username)
+        local user_info = pwd.getpw(ctx.username)
         if user_info == nil then
             error('failed to find user "%s"', ctx.username)
         end
@@ -414,8 +415,7 @@ local function start(ctx)
         log.error("Failed to start Tarantool instance '%s'", ctx.instance_name)
         if type(rv) == 'string' then
             if rv:match('Please call box.cfg') then
-                local _, rvt = utils.string_split(rv, '\n')
-                rv = rvt[1]
+                rv = rv:split('\n')
             end
             local rv_debug = nil
             if rv:match(':%d+: ') then

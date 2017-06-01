@@ -1,11 +1,11 @@
 #!/usr/bin/env tarantool
-local ffi = require('ffi')
-local fio = require('fio')
-local fun = require('fun')
-local log = require('log')
-local pwd = require('pwd')
-local json = require('json')
-local errno = require('errno')
+local ffi      = require('ffi')
+local fio      = require('fio')
+local fun      = require('fun')
+local log      = require('log')
+local pwd      = require('pwd')
+local json     = require('json')
+local errno    = require('errno')
 local argparse = require('internal.argparse').parse
 
 local yaml  = require('yaml').new()
@@ -133,18 +133,6 @@ local function is_callable(arg)
     return false
 end
 
-local function string_split(path, separator)
-   local fields, separator = {}, separator or '.'
-   path:gsub("([^" .. separator .. "]+)", function(c) table.insert(fields, c) end)
-   return #fields, fields
-end
-
-local function split_config(path)
-    local fields = {}
-    path:gsub("([^.]+)", function(c) table.insert(fields, c) end)
-    return #fields, fields
-end
-
 local function load_file_sandboxed(path, env, desc)
     path = fio.abspath(path)
     local ufunc, msg = loadfile(path)
@@ -176,21 +164,7 @@ local function load_func_sandboxed(ufunc, env, desc)
     return unpack(rval)
 end
 
-local function deepcopy(orig)
-    local orig_type = type(orig)
-    local copy = orig
-    if orig_type == 'table' then
-        copy = {}
-        for orig_key, orig_value in pairs(orig) do
-            copy[orig_key] = deepcopy(orig_value)
-        end
-    end
-    return copy
-end
-
 package.loaded['ctl.utils'] = {
-    string_split    = string_split,
-    execute_wrapped = execute_wrapped,
     error           = error,
     syserror        = syserror,
     log_syserror    = log_syserror,
@@ -225,16 +199,15 @@ local function tarantoolctl_cfg_new()
             end
         }, {
             __index = function(self, format)
-                self:error('unknown config format "%s"', format)
+                error('unknown config format "%s"', format)
             end
         })
     }
     return setmetatable(cfg, {
         __index = {
             register = function(self, name, opts)
-                opts = deepcopy(opts or {})
+                opts = table.deepcopy(opts or {})
                 self.defaults[name] = opts
-
             end,
             get = function(self, name)
                 local def_value = self.defaults[name]
@@ -263,8 +236,12 @@ local function tarantoolctl_cfg_new()
                 if default_path == nil then
                     return
                 end
-                local ext_len, ext = split_config(fio.basename(default_path))
-                local format = ext_len > 1 and ext[ext_len] or 'lua'
+                local bname = fio.basename(default_path)
+                local ext = bname:split('.')
+                local format = ext[#ext]
+                if (bname:startswith('.') and #ext == 2) or #ext == 1 then
+                    format = 'lua'
+                end
                 self.formats[format](self, default_path)
             end,
         },
@@ -281,22 +258,27 @@ local function usage_header()
     log.error("")
 end
 
+-- trim whitespaces
+local function string_trim(line)
+    return line:gsub("^%s*(.-)%s*$", "%1")
+end
+
 -- split long line into muple one's with max width of 80 charachters and
 -- prepends with depth spaces
-local function print_aligned(lines, depth)
-    local fields = {}
-    if lines ~= nil then
-        lines:gsub("([^\n]+)", function(val)
-            local rv = val:gsub("^%s*(.-)%s*$", "%1")
-            local fs = string.byte(rv, 1)
+local function print_aligned(lines, depth, print_f, first_indent)
+    if lines == nil then
+        return ''
+    end
+    local fields = table.concat(
+        fun.iter(lines.split('\n')):map(function(line)
+            line = string_trim(line)
+            -- no space before punctuation
+            local fs = rv:byte(1)
             if fs ~= 44 and fs ~= 46 and fs ~= 58 and fs ~= 59 then
                 rv = ' ' .. rv
             end
-            table.insert(fields, rv)
-        end)
-    end
-    lines = table.concat(fields, '')
-    fields = {}
+        end):totable(), ''
+    )
     while true do
         if #lines == 0 then break end
         local line = nil
@@ -309,8 +291,12 @@ local function print_aligned(lines, depth)
             line = lines:sub(0, 80 - depth) .. '-'
         end
         lines = lines:sub(#line + 1)
-        line = line:gsub("^%s*(.-)%s*$", "%1")
-        table.insert(fields, string.rep(' ', depth) .. line)
+        line = string_trim(line):ljust(depth + #line)
+        if first_indent then
+            first_indent = false
+            line = '    ' .. line
+        end
+        print_f(line)
     end
     return fields
 end
@@ -322,7 +308,6 @@ local tctl_method_methods = {
         if rv == 'usage' then
             return self:usage()
         end
-        -- out:write(string.format('exiting "%s" "%s"\n', rv, self.opts.exiting))
         if self.opts.exiting or rv == false then
             os.exit(rv and 0 or 1)
         end
@@ -344,35 +329,20 @@ local tctl_method_methods = {
         end
         for _, line in ipairs(header) do
             line = line:format(tarantoolctl.program_name)
-            local is_first_line = false
-            for _, line in ipairs(
-                print_aligned(line, opts.depth)
-            ) do
-                if is_first_line then line = '    ' .. line end
-                log.info(line)
-                is_first_line = true
-            end
+            print_aligned(line, opts.depth, log.info, true)
         end
 
         opts.detailed = opts.detailed or tarantoolctl.help
         if opts.detailed then
             local description = self.help.description
             log.info("")
-            for _, line in ipairs(
-                print_aligned(description, opts.depth + 2)
-            ) do
-                log.info(line)
-            end
+            print_aligned(line, opts.depth + 2, log.info, false)
             local arguments   = self.help.arguments
             log.info("")
             if arguments then
                 for _, arg in ipairs(arguments) do
-                    log.info('%s%s', string.rep(' ', opts.depth + 2), arg[1])
-                    for _, line in ipairs(
-                        print_aligned(arg[2], opts.depth + 4)
-                    ) do
-                        log.info(line)
-                    end
+                    log.info(arg[1]:ljust(#arg[1] + opts.depth + 2))
+                    print_aligned(line, opts.depth + 4, log.info, false)
                 end
                 log.info("")
             end
@@ -404,7 +374,7 @@ end
 local tctl_library_plugin_methods = {
     register_method  = function(self, name, callback, opts)
         log.verbose("registering method '%s' for library '%s'", name, self.name)
-        opts = deepcopy(opts or {})
+        opts = table.deepcopy(opts or {})
         opts.help = opts.help or {}
         assert(type(opts.help.header) == 'string' or
                type(opts.help.header) == 'table')
@@ -475,13 +445,14 @@ local tctl_library_methods = {
 
         if self.command == nil then
             if nested then
+                log.info()
                 log.info("%s[%s library]", string.rep(' ', depth), self.name)
             else
                 log.error("Expected command name, got nothing")
             end
         elseif self.methods[self.command] == nil then
-            log.error("Command '%s' isn't found in module '%s'",
-                      self.command, self.name)
+            log.error("Command '%s' isn't found in module '%s'", self.command,
+                      self.name)
         end
         if not nested then
             log.error("")
@@ -593,7 +564,7 @@ end
 local tctl_plugin_methods = {
     register_library = function(self, name, opts)
         log.verbose("registering library '%s'", name)
-        opts = deepcopy(opts or {})
+        opts = table.deepcopy(opts or {})
         opts.help = opts.help or {}
         if self.libraries[name] ~= nil then
             log.error("failed to register library. already exists")
@@ -612,11 +583,12 @@ local tctl_plugin_methods = {
     end,
     register_alias   = function(self, name, dotted_path, cfg)
         log.verbose("registering alias '%s' to '%s'", name, dotted_path)
-        local n, path = split_config(dotted_path)
+        local path = dotted_path:split('.')
+        log.info('%s', json.encode(path))
         local lname, mname = unpack(path)
-        if n ~= 2 then
+        if #path ~= 2 then
             log.error("bad alias path '%s' (expected 2 components, got %d)",
-                      dotted_path, n)
+                      dotted_path, #path)
             return nil
         end
         local library = self.libraries[lname]
@@ -773,7 +745,8 @@ local tctl_methods = {
         log.verbose('running %s', self.command)
         local alias = self.aliases[self.command]
         if alias ~= nil then
-            local _, path = split_config(alias.path)
+            local path = alias.path:split('.')
+            log.info('%s', json.encode(path))
             table.insert(self.arguments, 1, path[2])
             self.command = path[1]
         end
